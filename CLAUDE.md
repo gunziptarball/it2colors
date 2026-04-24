@@ -17,8 +17,17 @@ The script does not ship the color schemes. It expects the [mbadolato/iTerm2-Col
 
 ## Side effects worth knowing
 
-- Appends the chosen profile filename to `~/.it2colors_history` on every run.
+- Appends the chosen profile filename to `~/.it2colors_history` (full append-only log).
+- Overwrites `~/.it2colors_current` with the just-applied profile filename. The `-X` ("yuck") flag reads this file to decide what to move out of circulation when no name is passed — keep it as a single-line overwrite, not an append.
 - Exports `ITERM2_CURRENT_COLOR_SCHEME` — only useful if the script is *sourced* (e.g. `source it2colors.sh -r`), not executed as a subprocess. Preserve this when refactoring.
+
+## The `-X` flag
+
+`-X [<name>]` moves a scheme into `<schemes_path>/yuck/` so the random picker stops landing on it. With no name, it yucks whatever `~/.it2colors_current` says is currently applied. Uses `mv -i` so the user gets a confirmation prompt if a yucked file with the same name already exists.
+
+## Installed copy
+
+The script is also installed at `~/.local/bin/it2colors` (no `.sh` extension) and is the version the user actually runs. The two copies are not symlinked — when changing behavior, update both files.
 
 ## Testing
 
