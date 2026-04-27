@@ -10,7 +10,7 @@ MVP target: macOS + iTerm2 only.
 
 ## Layout
 
-Single-package, single-file CLI. Resist splitting into packages until there's a real reason — the entire program is ~200 lines.
+Single-package, single-file CLI. Resist splitting into packages until there's a real reason — the entire program is ~300 lines.
 
 ```
 main.go         CLI parsing, schemes-dir resolution, plist parse, OSC emit, history append
@@ -50,6 +50,13 @@ Components are `<real>` 0.0–1.0; clamp via `min(255, int(v*256))` (matches the
 
 The OSC bytes go to `/dev/tty`, not stdout. This is essential because of the `--eval` mode (below) — stdout is captured by the user's `eval`, but the escape sequences still need to reach the terminal.
 
+## Stream discipline
+
+Three streams, three jobs — keep them separate:
+- `/dev/tty`: OSC escape bytes only.
+- stdout: only the `export IT2COLORS_SCHEME=<name>` line under `-eval`. Stays empty otherwise so `eval "$(it2colors …)"` is safe.
+- stderr: the `Applied scheme: <name>` status line (with `(hue +N°)` suffix when rotated) and any errors. `-q` suppresses the status line for scripts that find it noisy; errors still print.
+
 ## `-hue`: hue rotation in HCL
 
 `-hue N` rotates every color in the chosen scheme by N degrees in CIE HCL space (polar form of CIE Lab) before applying it. The point of doing this in HCL rather than HSL/HSV is that **lightness is preserved** — so foreground/background contrast ratios are essentially unchanged and the result is still readable.
@@ -80,7 +87,7 @@ fi
 
 The `[ -t 1 ]` guard matters: skips non-interactive shells (cron, scp). Without the guard, the script will fail at `open /dev/tty` because there's no controlling terminal.
 
-A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking.
+A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking. (An earlier bash prototype had a `-X` flag for this; it was dropped in the Go rewrite and not yet re-ported.)
 
 `-c` reads `$IT2COLORS_SCHEME` to re-apply (or transform) the active scheme — `it2colors -c -hue 30` tints the current theme in place. Errors with a `.bashrc` hint if the env var isn't set, since the feature is meaningless without the eval-style integration.
 
