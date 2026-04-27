@@ -27,6 +27,7 @@ type Profile map[string]Color
 
 func main() {
 	random := flag.Bool("r", false, "pick a random scheme (default when no name is given)")
+	current := flag.Bool("c", false, "use the current scheme from $IT2COLORS_SCHEME (set by -eval)")
 	eval := flag.Bool("eval", false, "print 'export IT2COLORS_SCHEME=<name>' to stdout; OSC escape still goes to /dev/tty")
 	list := flag.Bool("list", false, "list available scheme names and exit")
 	dir := flag.String("schemes-dir", "", "override the schemes directory")
@@ -51,15 +52,25 @@ func main() {
 		return
 	}
 
-	useRandom := *random || flag.NArg() == 0
+	if *current && (*random || flag.NArg() > 0) {
+		fail(fmt.Errorf("-c cannot be combined with -r or a scheme name"))
+	}
+
 	var profileFile string
-	if useRandom {
+	switch {
+	case *current:
+		name := os.Getenv("IT2COLORS_SCHEME")
+		if name == "" {
+			fail(fmt.Errorf("$IT2COLORS_SCHEME is not set; add `eval \"$(it2colors -r -eval)\"` to your shell startup"))
+		}
+		profileFile = name + ".itermcolors"
+	case *random || flag.NArg() == 0:
 		f, err := pickRandom(schemesDir)
 		if err != nil {
 			fail(err)
 		}
 		profileFile = f
-	} else {
+	default:
 		arg := strings.TrimSuffix(flag.Arg(0), ".itermcolors")
 		profileFile = arg + ".itermcolors"
 	}

@@ -82,6 +82,8 @@ The `[ -t 1 ]` guard matters: skips non-interactive shells (cron, scp). Without 
 
 A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking.
 
+`-c` reads `$IT2COLORS_SCHEME` to re-apply (or transform) the active scheme — `it2colors -c -hue 30` tints the current theme in place. Errors with a `.bashrc` hint if the env var isn't set, since the feature is meaningless without the eval-style integration.
+
 ## Schemes directory resolution
 
 In order:
