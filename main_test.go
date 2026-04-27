@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"math"
 	"path/filepath"
 	"testing"
+
+	"github.com/lucasb-eyer/go-colorful"
 )
 
 func TestParseProfile(t *testing.T) {
@@ -78,6 +81,88 @@ func TestSlotFor(t *testing.T) {
 			t.Errorf("slotFor(%q) = (%q, %v), want (%q, %v)", c.key, got, ok, c.slot, c.ok)
 		}
 	}
+}
+
+func TestRotateHue(t *testing.T) {
+	red := Color{Red: 0.8, Green: 0.2, Blue: 0.2}
+	gray := Color{Red: 0.5, Green: 0.5, Blue: 0.5}
+	black := Color{Red: 0, Green: 0, Blue: 0}
+	in := Profile{
+		"Foreground Color": red,
+		"Background Color": gray,
+		"Bold Color":       black,
+	}
+
+	t.Run("zero is identity", func(t *testing.T) {
+		out := rotateHue(in, 0)
+		// Same map returned — no allocation, no transform.
+		if &out == nil || out["Foreground Color"] != red {
+			t.Errorf("rotateHue(_, 0) should be identity")
+		}
+	})
+
+	t.Run("360 returns to same hue", func(t *testing.T) {
+		out := rotateHue(in, 360)
+		got := out["Foreground Color"]
+		if !approxColor(got, red, 0.01) {
+			t.Errorf("rotateHue(red, 360) = %+v, want approx %+v", got, red)
+		}
+	})
+
+	t.Run("preserves lightness", func(t *testing.T) {
+		_, _, lIn := (colorful.Color{R: red.Red, G: red.Green, B: red.Blue}).Hcl()
+		got := rotateHue(in, 120)["Foreground Color"]
+		_, _, lOut := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
+		if math.Abs(lIn-lOut) > 0.05 {
+			t.Errorf("lightness drifted: in=%v out=%v", lIn, lOut)
+		}
+	})
+
+	t.Run("achromatic colors pass through", func(t *testing.T) {
+		out := rotateHue(in, 90)
+		if out["Background Color"] != gray {
+			t.Errorf("gray should not rotate, got %+v", out["Background Color"])
+		}
+		if out["Bold Color"] != black {
+			t.Errorf("black should not rotate, got %+v", out["Bold Color"])
+		}
+	})
+
+	t.Run("rotates hue by the requested amount", func(t *testing.T) {
+		hIn, _, _ := (colorful.Color{R: red.Red, G: red.Green, B: red.Blue}).Hcl()
+		got := rotateHue(in, 90)["Foreground Color"]
+		hOut, _, _ := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
+		want := math.Mod(hIn+90, 360)
+		// Generous tolerance: gamut clamping can shift hue several degrees
+		// when a saturated rotation lands outside displayable sRGB.
+		if math.Abs(hOut-want) > 8.0 {
+			t.Errorf("hue: in=%v +90 → got %v, want ≈ %v", hIn, hOut, want)
+		}
+	})
+}
+
+func TestRotateHueChangesRealScheme(t *testing.T) {
+	p, err := loadProfile(filepath.Join("testdata", "Adventure.itermcolors"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var orig, rot bytes.Buffer
+	if err := applyProfile(&orig, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyProfile(&rot, rotateHue(p, 45)); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(orig.Bytes(), rot.Bytes()) {
+		t.Fatal("rotateHue(_, 45) produced identical OSC bytes — rotation is a no-op")
+	}
+	t.Logf("orig and rotated differ as expected (orig=%dB, rot=%dB)", orig.Len(), rot.Len())
+}
+
+func approxColor(a, b Color, eps float64) bool {
+	return math.Abs(a.Red-b.Red) < eps &&
+		math.Abs(a.Green-b.Green) < eps &&
+		math.Abs(a.Blue-b.Blue) < eps
 }
 
 func TestClampByte(t *testing.T) {

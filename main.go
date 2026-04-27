@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasb-eyer/go-colorful"
 	"howett.net/plist"
 )
 
@@ -28,6 +30,8 @@ func main() {
 	eval := flag.Bool("eval", false, "print 'export IT2COLORS_SCHEME=<name>' to stdout; OSC escape still goes to /dev/tty")
 	list := flag.Bool("list", false, "list available scheme names and exit")
 	dir := flag.String("schemes-dir", "", "override the schemes directory")
+	hue := flag.Float64("hue", 0, "rotate every color's hue by this many degrees (in CIE HCL space; preserves perceived lightness)")
+	quiet := flag.Bool("q", false, "don't print the 'Applied scheme: ...' status line")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -65,6 +69,7 @@ func main() {
 	if err != nil {
 		fail(fmt.Errorf("loading %s: %w", profilePath, err))
 	}
+	profile = rotateHue(profile, *hue)
 	name := strings.TrimSuffix(profileFile, ".itermcolors")
 
 	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
@@ -78,6 +83,14 @@ func main() {
 
 	if err := appendHistory(name); err != nil {
 		fmt.Fprintln(os.Stderr, "it2colors: warning: history append failed:", err)
+	}
+
+	if !*quiet {
+		msg := fmt.Sprintf("Applied scheme: %s", name)
+		if *hue != 0 {
+			msg += fmt.Sprintf(" (hue %+g°)", *hue)
+		}
+		fmt.Fprintln(os.Stderr, msg)
 	}
 
 	if *eval {
@@ -224,6 +237,32 @@ func slotFor(key string) (byte, bool) {
 		return "0123456789abcdef"[n], true
 	}
 	return 0, false
+}
+
+// HCL (not HSL) so lightness is preserved and contrast against the
+// background is unchanged. Achromatic colors are passed through:
+// their hue is undefined and rotating it would tint pure black/white/gray.
+func rotateHue(p Profile, deg float64) Profile {
+	if deg == 0 {
+		return p
+	}
+	out := make(Profile, len(p))
+	const achromatic = 1e-4
+	for k, c := range p {
+		col := colorful.Color{R: c.Red, G: c.Green, B: c.Blue}.Clamped()
+		h, ch, l := col.Hcl()
+		if ch < achromatic || math.IsNaN(h) {
+			out[k] = c
+			continue
+		}
+		h = math.Mod(h+deg, 360)
+		if h < 0 {
+			h += 360
+		}
+		r := colorful.Hcl(h, ch, l).Clamped()
+		out[k] = Color{Red: r.R, Green: r.G, Blue: r.B}
+	}
+	return out
 }
 
 func clampByte(v float64) int {
