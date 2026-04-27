@@ -42,11 +42,21 @@ func main() {
 	yuck := flag.Bool("yuck", false, "blacklist $IT2COLORS_SCHEME from future picks; combine with -r to immediately move to a new scheme")
 	all := flag.Bool("all", false, "pick from all schemes, ignoring the favorites list (yuck list still applies)")
 	showVersion := flag.BoolP("version", "v", false, "print version and exit")
+	completion := flag.String("completion", "", "print shell completion script and exit (bash, zsh, or fish)")
 	flag.Usage = usage
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(buildVersion())
+		return
+	}
+
+	if *completion != "" {
+		script, err := completionScript(*completion)
+		if err != nil {
+			fail(err)
+		}
+		fmt.Print(script)
 		return
 	}
 
@@ -314,6 +324,32 @@ func pickRandom(schemesDir string, useAll bool) (string, error) {
 		}
 	}
 	return pool[rand.IntN(len(pool))], nil
+}
+
+func completionScript(shell string) (string, error) {
+	switch shell {
+	case "bash":
+		return `_it2colors_completions() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ "${cur}" != -* ]]; then
+        COMPREPLY=($(compgen -W "$(it2colors -l 2>/dev/null)" -- "${cur}"))
+    fi
+}
+complete -F _it2colors_completions it2colors
+`, nil
+	case "zsh":
+		return `_it2colors() {
+    local -a schemes
+    schemes=(${(f)"$(it2colors -l 2>/dev/null)"})
+    _describe 'scheme' schemes
+}
+compdef _it2colors it2colors
+`, nil
+	case "fish":
+		return "complete -c it2colors -f -a \"(it2colors -l 2>/dev/null)\" -d \"color scheme\"\n", nil
+	default:
+		return "", fmt.Errorf("unknown shell %q — supported: bash, zsh, fish", shell)
+	}
 }
 
 func buildVersion() string {

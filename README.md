@@ -60,6 +60,21 @@ Each new interactive shell picks a random scheme. The guards:
 
 `--eval` exports `IT2COLORS_SCHEME=<name>` so subsequent calls like `it2colors -c --hue 30` know which scheme is active in *this* shell — handy when several iTerm tabs are running different schemes.
 
+## Shell completion
+
+Tab-complete scheme names by sourcing the completion script for your shell:
+
+```bash
+# zsh — add to .zshrc
+source <(it2colors --completion zsh)
+
+# bash — add to .bashrc
+source <(it2colors --completion bash)
+
+# fish — add to config.fish
+it2colors --completion fish | source
+```
+
 ## Schemes directory
 
 `it2colors` resolves the schemes archive in this order:
