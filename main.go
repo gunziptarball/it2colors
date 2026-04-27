@@ -33,6 +33,7 @@ func main() {
 	dir := flag.String("schemes-dir", "", "override the schemes directory")
 	hue := flag.Float64("hue", 0, "rotate every color's hue by this many degrees (in CIE HCL space; preserves perceived lightness)")
 	quiet := flag.BoolP("quiet", "q", false, "don't print the 'Applied scheme: ...' status line")
+	preview := flag.BoolP("preview", "p", false, "after applying, print a foreground × background SGR test table to verify the scheme")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -90,6 +91,11 @@ func main() {
 	defer tty.Close()
 	if err := applyProfile(tty, profile); err != nil {
 		fail(err)
+	}
+	if *preview {
+		if err := printPreview(tty); err != nil {
+			fail(err)
+		}
 	}
 
 	if err := appendHistory(name); err != nil {
@@ -274,6 +280,35 @@ func rotateHue(p Profile, deg float64) Profile {
 		out[k] = Color{Red: r.R, Green: r.G, Blue: r.B}
 	}
 	return out
+}
+
+// Foreground × background SGR table, ported from the
+// mbadolato/iterm2-color-schemes archive's tools/screenshotTable.sh
+// (originally http://tldp.org/HOWTO/Bash-Prompt-HOWTO/x329.html).
+// This is the same content that the per-scheme PNGs in screenshots/
+// were captured from.
+func printPreview(w io.Writer) error {
+	const cell = "gYw"
+	fgs := []string{
+		"    m", "   1m",
+		"  30m", "1;30m", "  31m", "1;31m", "  32m", "1;32m", "  33m", "1;33m",
+		"  34m", "1;34m", "  35m", "1;35m", "  36m", "1;36m", "  37m", "1;37m",
+	}
+	bgs := []string{"40m", "41m", "42m", "43m", "44m", "45m", "46m", "47m"}
+
+	var buf bytes.Buffer
+	fmt.Fprint(&buf, "\n         def     40m     41m     42m     43m     44m     45m     46m     47m\n")
+	for _, fgPad := range fgs {
+		fg := strings.TrimSpace(fgPad)
+		fmt.Fprintf(&buf, " %s \x1b[%s  %s  ", fgPad, fg, cell)
+		for _, bg := range bgs {
+			fmt.Fprintf(&buf, " \x1b[%s\x1b[%s  %s  \x1b[0m", fg, bg, cell)
+		}
+		buf.WriteByte('\n')
+	}
+	buf.WriteByte('\n')
+	_, err := w.Write(buf.Bytes())
+	return err
 }
 
 func clampByte(v float64) int {

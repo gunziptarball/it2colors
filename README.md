@@ -38,6 +38,7 @@ it2colors -l             # list all available schemes (or --list)
 it2colors --hue 30       # random scheme, hue-rotated 30°
 it2colors -c --hue 30    # tint the current scheme in place by 30°
 it2colors -q             # apply quietly (no "Applied scheme:" status line)
+it2colors -p             # apply, then print a color test table
 it2colors --help         # full flag reference
 ```
 
@@ -74,6 +75,16 @@ Combine with `-c` to tint the active scheme without picking a new one:
 ```sh
 it2colors -c --hue 30     # warmer
 it2colors -c --hue -30    # cooler
+```
+
+## Preview
+
+`-p` / `--preview` prints the same foreground × background color matrix used to capture the per-scheme PNGs in the upstream archive's `screenshots/` directory — handy for quickly seeing what a scheme looks like:
+
+```sh
+it2colors Adventure -p           # apply Adventure and show the table
+it2colors -c -p                  # show the table for the current scheme
+it2colors -c --hue 30 -p         # tint the current scheme and preview the result
 ```
 
 ## History

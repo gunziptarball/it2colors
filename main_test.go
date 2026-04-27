@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lucasb-eyer/go-colorful"
@@ -163,6 +164,24 @@ func approxColor(a, b Color, eps float64) bool {
 	return math.Abs(a.Red-b.Red) < eps &&
 		math.Abs(a.Green-b.Green) < eps &&
 		math.Abs(a.Blue-b.Blue) < eps
+}
+
+func TestPrintPreview(t *testing.T) {
+	var buf bytes.Buffer
+	if err := printPreview(&buf); err != nil {
+		t.Fatalf("printPreview: %v", err)
+	}
+	got := buf.String()
+
+	for _, want := range []string{
+		"def     40m     41m",                  // header
+		"\x1b[31m  gYw  ",                      // red fg on default bg
+		"\x1b[1;31m\x1b[44m  gYw  \x1b[0m",     // bold red on blue, with reset
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("printPreview output missing %q", want)
+		}
+	}
 }
 
 func TestClampByte(t *testing.T) {

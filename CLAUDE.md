@@ -54,7 +54,7 @@ The OSC bytes go to `/dev/tty`, not stdout. This is essential because of the `--
 ## Stream discipline
 
 Three streams, three jobs — keep them separate:
-- `/dev/tty`: OSC escape bytes only.
+- `/dev/tty`: OSC escape bytes, plus the `--preview` color table (also terminal-display content, written to the same writer right after the OSC bytes).
 - stdout: only the `export IT2COLORS_SCHEME=<name>` line under `--eval`. Stays empty otherwise so `eval "$(it2colors …)"` is safe.
 - stderr: the `Applied scheme: <name>` status line (with `(hue +N°)` suffix when rotated) and any errors. `-q` suppresses the status line for scripts that find it noisy; errors still print.
 
@@ -67,6 +67,12 @@ Implementation notes for future-you:
 - Out-of-gamut results after rotation are clamped via `colorful.Color.Clamped()`. This is the source of the hue drift acknowledged in the rotation test (~3–8° on highly saturated colors).
 - The choice of CIE HCL over OKLCH is pragmatic: go-colorful ships HCL out of the box, and the perceptual difference between the two for "rotate by N degrees and look reasonable" isn't worth pulling in a second color library. If we ever do real perceptual work (deduping similar schemes, contrast-aware tinting), revisit.
 - The transform runs once on the parsed `Profile` map between `loadProfile` and `applyProfile`. Adding chroma/lightness knobs later is just additional fields in the same per-color loop.
+
+## `--preview`: SGR test table
+
+`-p` / `--preview` prints the classic foreground × background color matrix to `/dev/tty` after applying the scheme. The output format is a verbatim port of the upstream archive's `tools/screenshotTable.sh` (originally from the [Bash Prompt HOWTO](http://tldp.org/HOWTO/Bash-Prompt-HOWTO/x329.html)) — the same script used to capture the per-scheme PNGs in `screenshots/`. Reproducing that exact format is intentional: it's what users recognize when comparing against the upstream gallery.
+
+The preview uses pure SGR escapes (`\x1b[31m` etc.), not the OSC palette directly. It looks colorful only because we just applied the OSC palette one statement earlier; that ordering matters.
 
 ## --eval mode and per-shell state
 
