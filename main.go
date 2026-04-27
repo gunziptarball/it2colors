@@ -123,7 +123,7 @@ func main() {
 	}
 
 	if *eval {
-		fmt.Printf("export IT2COLORS_SCHEME=%s\n", name)
+		fmt.Printf("export IT2COLORS_SCHEME='%s'\n", name)
 	}
 }
 

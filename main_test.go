@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -217,6 +218,24 @@ func TestAdjustColorsChangesRealScheme(t *testing.T) {
 				t.Fatalf("adjustColors(%v, %v, %v) produced identical OSC bytes — transform is a no-op", tc.hue, tc.lightness, tc.saturation)
 			}
 		})
+	}
+}
+
+func TestEvalOutputQuotesMultiWordNames(t *testing.T) {
+	// Scheme names with spaces must be single-quoted so eval "$(it2colors ...)"
+	// assigns the full name rather than splitting on the space.
+	cases := []struct {
+		name string
+		want string
+	}{
+		{"Adventure", "export IT2COLORS_SCHEME='Adventure'\n"},
+		{"JetBrains Darcula", "export IT2COLORS_SCHEME='JetBrains Darcula'\n"},
+	}
+	for _, c := range cases {
+		got := fmt.Sprintf("export IT2COLORS_SCHEME='%s'\n", c.name)
+		if got != c.want {
+			t.Errorf("eval output for %q: got %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
