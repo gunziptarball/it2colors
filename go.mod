@@ -1,4 +1,4 @@
-module github.com/jjg/it2colors
+module github.com/gunziptarball/it2colors
 
 go 1.26.2
 
