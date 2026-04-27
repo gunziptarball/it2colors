@@ -20,9 +20,10 @@ testdata/       one real .itermcolors fixture
 
 External deps:
 - `howett.net/plist` — parses `.itermcolors` plist XML.
-- `github.com/lucasb-eyer/go-colorful` — sRGB ↔ CIE HCL conversions for the `-hue` transform.
+- `github.com/lucasb-eyer/go-colorful` — sRGB ↔ CIE HCL conversions for the `--hue` transform.
+- `github.com/spf13/pflag` — GNU-style short/long flag pairs (e.g. `-r` / `--random`). Imported as `flag`, drop-in for stdlib `flag`.
 
-Don't reach for a CLI framework (cobra/urfave) — stdlib `flag` is sufficient.
+Don't reach for a CLI framework (cobra/urfave) — pflag alone is sufficient.
 
 ## Build / test / install
 
@@ -54,12 +55,12 @@ The OSC bytes go to `/dev/tty`, not stdout. This is essential because of the `--
 
 Three streams, three jobs — keep them separate:
 - `/dev/tty`: OSC escape bytes only.
-- stdout: only the `export IT2COLORS_SCHEME=<name>` line under `-eval`. Stays empty otherwise so `eval "$(it2colors …)"` is safe.
+- stdout: only the `export IT2COLORS_SCHEME=<name>` line under `--eval`. Stays empty otherwise so `eval "$(it2colors …)"` is safe.
 - stderr: the `Applied scheme: <name>` status line (with `(hue +N°)` suffix when rotated) and any errors. `-q` suppresses the status line for scripts that find it noisy; errors still print.
 
-## `-hue`: hue rotation in HCL
+## `--hue`: hue rotation in HCL
 
-`-hue N` rotates every color in the chosen scheme by N degrees in CIE HCL space (polar form of CIE Lab) before applying it. The point of doing this in HCL rather than HSL/HSV is that **lightness is preserved** — so foreground/background contrast ratios are essentially unchanged and the result is still readable.
+`--hue N` rotates every color in the chosen scheme by N degrees in CIE HCL space (polar form of CIE Lab) before applying it. The point of doing this in HCL rather than HSL/HSV is that **lightness is preserved** — so foreground/background contrast ratios are essentially unchanged and the result is still readable.
 
 Implementation notes for future-you:
 - Achromatic colors (chroma below ~1e-4) are passed through untouched. CIE HCL hue is undefined when chroma is 0, and rotating it would tint pure black/white/gray — visibly wrong.
@@ -81,7 +82,7 @@ Intended `.bashrc`/`.zshrc` usage:
 
 ```bash
 if [ -t 1 ] && command -v it2colors >/dev/null; then
-  eval "$(it2colors -r -eval)"
+  eval "$(it2colors -r --eval)"
 fi
 ```
 
@@ -89,12 +90,12 @@ The `[ -t 1 ]` guard matters: skips non-interactive shells (cron, scp). Without 
 
 A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking. (An earlier bash prototype had a `-X` flag for this; it was dropped in the Go rewrite and not yet re-ported.)
 
-`-c` reads `$IT2COLORS_SCHEME` to re-apply (or transform) the active scheme — `it2colors -c -hue 30` tints the current theme in place. Errors with a `.bashrc` hint if the env var isn't set, since the feature is meaningless without the eval-style integration.
+`-c` / `--current` reads `$IT2COLORS_SCHEME` to re-apply (or transform) the active scheme — `it2colors -c --hue 30` tints the current theme in place. Errors with a `.bashrc` hint if the env var isn't set, since the feature is meaningless without the eval-style integration.
 
 ## Schemes directory resolution
 
 In order:
-1. `-schemes-dir` flag.
+1. `--schemes-dir` flag.
 2. `$ITERM2_COLOR_SCHEMES_PATH`.
 3. Newest `~/Downloads/mbadolato-iTerm2-Color-Schemes-*` directory (mtime sort).
 
