@@ -2,33 +2,95 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Repository
+## What this is
 
-A single bash script, `it2colors.sh`, that applies an iTerm2 color scheme to the current session (a named one, or a random one).
+A small Go CLI, `it2colors`, that picks an iTerm2 color scheme from the [mbadolato/iterm2-color-schemes](https://github.com/mbadolato/iterm2-color-schemes) archive and applies it to the current iTerm2 session by writing OSC escape sequences to `/dev/tty`. Intended to be run from `.bashrc`/`.zshrc` so every new shell launches with a different scheme.
 
-## External dependency
+MVP target: macOS + iTerm2 only.
 
-The script does not ship the color schemes. It expects the [mbadolato/iTerm2-Color-Schemes](https://iterm2colorschemes.com/) archive to be unpacked on disk, and shells out to two tools inside it:
+## Layout
 
-- `<schemes_path>/tools/preview.rb` — emits the OSC escape sequence that actually changes the terminal's colors. Calling this is the script's whole reason to exist; it is not optional cosmetic output.
-- `<schemes_path>/tools/screenshotTable.sh` — only invoked under `-v`.
+Single-package, single-file CLI. Resist splitting into packages until there's a real reason — the entire program is ~200 lines.
 
-`schemes_path` resolution: `$ITERM2_COLOR_SCHEMES_PATH` if set, else the most recent `~/Downloads/mbadolato-iTerm2-Color-Schemes-<sha>/` directory. Profiles live at `<schemes_path>/schemes/<name>.itermcolors`.
+```
+main.go         CLI parsing, schemes-dir resolution, plist parse, OSC emit, history append
+main_test.go    plist parse + OSC render + slot mapping + clamp tests
+testdata/       one real .itermcolors fixture
+```
 
-## Side effects worth knowing
+One external dep: `howett.net/plist`. Don't reach for a CLI framework (cobra/urfave) — stdlib `flag` is sufficient.
 
-- Appends the chosen profile filename to `~/.it2colors_history` (full append-only log).
-- Overwrites `~/.it2colors_current` with the just-applied profile filename. The `-X` ("yuck") flag reads this file to decide what to move out of circulation when no name is passed — keep it as a single-line overwrite, not an append.
-- Exports `ITERM2_CURRENT_COLOR_SCHEME` — only useful if the script is *sourced* (e.g. `source it2colors.sh -r`), not executed as a subprocess. Preserve this when refactoring.
+## Build / test / install
 
-## The `-X` flag
+```
+go build -o it2colors .          # local build
+go test ./...                    # run tests
+go build -o ~/.local/bin/it2colors .   # install (replaces previous binary)
+```
 
-`-X [<name>]` moves a scheme into `<schemes_path>/yuck/` so the random picker stops landing on it. With no name, it yucks whatever `~/.it2colors_current` says is currently applied. Uses `mv -i` so the user gets a confirmation prompt if a yucked file with the same name already exists.
+## OSC escape contract (the load-bearing detail)
+
+For each color in a `.itermcolors` plist, write:
+
+```
+ESC ] P <slot> <rrggbb> ESC \
+```
+
+Slot mapping (in `slotFor` in main.go):
+- ANSI 0–15 → hex digit `'0'..'9'`, `'a'..'f'`
+- `Foreground Color` → `g`, `Background Color` → `h`, `Bold Color` → `i`, `Selection Color` → `j`, `Selected Text Color` → `k`, `Cursor Color` → `l`, `Cursor Text Color` → `m`
+
+Other keys in the plist (`Tab Color`, `Underline Color`, `Link Color`, etc.) have no OSC P slot and are silently skipped — don't error on them.
+
+Components are `<real>` 0.0–1.0; clamp via `min(255, int(v*256))` (matches the Ruby `tools/preview.rb` behavior — values can be slightly >1 in the wild).
+
+The OSC bytes go to `/dev/tty`, not stdout. This is essential because of the `--eval` mode (below) — stdout is captured by the user's `eval`, but the escape sequences still need to reach the terminal.
+
+## --eval mode and per-shell state
+
+The "current scheme" is tracked **per-shell via env var**, not via a global file. Old prototypes wrote to `~/.it2colors_current`; that's deliberately gone — it's meaningless when several iTerm tabs are open.
+
+Under `--eval`, the binary writes a single line to stdout:
+
+```
+export IT2COLORS_SCHEME=<name>
+```
+
+Intended `.bashrc`/`.zshrc` usage:
+
+```bash
+if [ -t 1 ] && command -v it2colors >/dev/null; then
+  eval "$(it2colors -r -eval)"
+fi
+```
+
+The `[ -t 1 ]` guard matters: skips non-interactive shells (cron, scp). Without the guard, the script will fail at `open /dev/tty` because there's no controlling terminal.
+
+A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking.
+
+## Schemes directory resolution
+
+In order:
+1. `-schemes-dir` flag.
+2. `$ITERM2_COLOR_SCHEMES_PATH`.
+3. Newest `~/Downloads/mbadolato-iTerm2-Color-Schemes-*` directory (mtime sort).
+
+A "valid" schemes dir contains a `schemes/` subdirectory.
+
+## History file
+
+Append-only `~/.it2colors_history`, one line per invocation:
+
+```
+2026-04-26T20:06:11-04:00<TAB>Adventure
+```
+
+Failure to append is non-fatal — emits a `warning:` to stderr and continues. The history is for the human, not for the program.
+
+## Testing reality check
+
+`/dev/tty` is unavailable in non-interactive shells (CI, subprocess invocations, etc.). The unit tests cover plist parsing, escape rendering against a fixture, slot mapping, and clamping — none of those need a TTY. End-to-end "did the colors actually change" verification has to happen in an iTerm2 window by hand.
 
 ## Installed copy
 
-The script is also installed at `~/.local/bin/it2colors` (no `.sh` extension) and is the version the user actually runs. The two copies are not symlinked — when changing behavior, update both files.
-
-## Testing
-
-There is no test suite. To verify changes, run the script in an iTerm2 session and confirm the colors change; `-v` plus a known profile name is the most informative smoke test.
+The user runs `~/.local/bin/it2colors`. The repo build is the source; reinstall after changes with `go build -o ~/.local/bin/it2colors .` (it'll overwrite cleanly since the existing file is now also a Go binary, not the old bash script).
