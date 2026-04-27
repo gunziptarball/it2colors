@@ -36,6 +36,10 @@ func main() {
 	saturation := flag.Float64("saturation", 1, "scale every color's chroma/saturation (CIE HCL; 1.0 = no change, <1 desaturates, >1 boosts)")
 	quiet := flag.BoolP("quiet", "q", false, "don't print the 'Applied scheme: ...' status line")
 	preview := flag.BoolP("preview", "p", false, "after applying, print a foreground × background SGR test table to verify the scheme")
+	favorite := flag.BoolP("favorite", "f", false, "add $IT2COLORS_SCHEME to favorites (used by default random pool when non-empty)")
+	unfavorite := flag.Bool("unfavorite", false, "remove $IT2COLORS_SCHEME from favorites")
+	yuck := flag.Bool("yuck", false, "blacklist $IT2COLORS_SCHEME from future picks; combine with -r to immediately move to a new scheme")
+	all := flag.Bool("all", false, "pick from all schemes, ignoring the favorites list (yuck list still applies)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -55,6 +59,48 @@ func main() {
 		return
 	}
 
+	// Management flags: operate on $IT2COLORS_SCHEME and exit (--yuck continues if -r is also set).
+	if *favorite || *unfavorite || *yuck {
+		scheme, err := currentSchemeName()
+		if err != nil {
+			fail(err)
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fail(err)
+		}
+		favPath := filepath.Join(home, ".it2colors_favorites")
+		yuckPath := filepath.Join(home, ".it2colors_yuck")
+
+		if *favorite {
+			if err := addToNameFile(favPath, scheme); err != nil {
+				fmt.Fprintln(os.Stderr, "it2colors: warning: could not update favorites:", err)
+			}
+			fmt.Fprintf(os.Stderr, "Favorited: %s\n", scheme)
+			return
+		}
+		if *unfavorite {
+			if err := removeFromNameFile(favPath, scheme); err != nil {
+				fmt.Fprintln(os.Stderr, "it2colors: warning: could not update favorites:", err)
+			}
+			fmt.Fprintf(os.Stderr, "Unfavorited: %s\n", scheme)
+			return
+		}
+		if *yuck {
+			if err := removeFromNameFile(favPath, scheme); err != nil {
+				fmt.Fprintln(os.Stderr, "it2colors: warning: could not update favorites:", err)
+			}
+			if err := addToNameFile(yuckPath, scheme); err != nil {
+				fmt.Fprintln(os.Stderr, "it2colors: warning: could not update yuck list:", err)
+			}
+			fmt.Fprintf(os.Stderr, "Yucked: %s\n", scheme)
+			if !*random && flag.NArg() == 0 {
+				return
+			}
+			// fall through to pick a new scheme
+		}
+	}
+
 	if *current && (*random || flag.NArg() > 0) {
 		fail(fmt.Errorf("--current cannot be combined with --random or a scheme name"))
 	}
@@ -62,13 +108,13 @@ func main() {
 	var profileFile string
 	switch {
 	case *current:
-		name := os.Getenv("IT2COLORS_SCHEME")
-		if name == "" {
-			fail(fmt.Errorf("$IT2COLORS_SCHEME is not set; add `eval \"$(it2colors -r --eval)\"` to your shell startup"))
+		scheme, err := currentSchemeName()
+		if err != nil {
+			fail(err)
 		}
-		profileFile = name + ".itermcolors"
+		profileFile = scheme + ".itermcolors"
 	case *random || flag.NArg() == 0:
-		f, err := pickRandom(schemesDir)
+		f, err := pickRandom(schemesDir, *all)
 		if err != nil {
 			fail(err)
 		}
@@ -200,30 +246,125 @@ func listSchemes(schemesDir string) ([]string, error) {
 	return names, nil
 }
 
-func pickRandom(schemesDir string) (string, error) {
-	names, err := listSchemes(schemesDir)
+func pickRandom(schemesDir string, useAll bool) (string, error) {
+	allNames, err := listSchemes(schemesDir) // filenames with .itermcolors extension
 	if err != nil {
 		return "", err
 	}
-	if len(names) == 0 {
+	if len(allNames) == 0 {
 		return "", fmt.Errorf("no .itermcolors files in %s/schemes", schemesDir)
+	}
+
+	home, _ := os.UserHomeDir()
+	yuck := loadNameSet(filepath.Join(home, ".it2colors_yuck"))
+
+	// If favorites are defined and --all wasn't requested, restrict to that pool.
+	if !useAll {
+		favs := loadNameSet(filepath.Join(home, ".it2colors_favorites"))
+		if len(favs) > 0 {
+			// Validate against available schemes so stale favorites don't cause errors.
+			valid := make(map[string]bool, len(allNames))
+			for _, n := range allNames {
+				valid[strings.TrimSuffix(n, ".itermcolors")] = true
+			}
+			var pool []string
+			for name := range favs {
+				if valid[name] && !yuck[name] {
+					pool = append(pool, name+".itermcolors")
+				}
+			}
+			if len(pool) > 0 {
+				sort.Strings(pool)
+				return pool[rand.IntN(len(pool))], nil
+			}
+			// All favorites were yucked or invalid — fall through to full pool.
+		}
+	}
+
+	// Full pool: exclude yuck, then apply recent-history exclusion.
+	pool := make([]string, 0, len(allNames))
+	for _, n := range allNames {
+		if !yuck[strings.TrimSuffix(n, ".itermcolors")] {
+			pool = append(pool, n)
+		}
+	}
+	if len(pool) == 0 {
+		pool = allNames // every scheme is yucked — give up and use all
 	}
 	if recent := recentHistory(20); len(recent) > 0 {
 		skip := make(map[string]bool, len(recent))
 		for _, n := range recent {
 			skip[n+".itermcolors"] = true
 		}
-		var pool []string
-		for _, n := range names {
+		var filtered []string
+		for _, n := range pool {
 			if !skip[n] {
-				pool = append(pool, n)
+				filtered = append(filtered, n)
 			}
 		}
-		if len(pool) > 0 {
-			names = pool
+		if len(filtered) > 0 {
+			pool = filtered
 		}
 	}
-	return names[rand.IntN(len(names))], nil
+	return pool[rand.IntN(len(pool))], nil
+}
+
+func currentSchemeName() (string, error) {
+	name := os.Getenv("IT2COLORS_SCHEME")
+	if name == "" {
+		return "", fmt.Errorf("$IT2COLORS_SCHEME is not set; add `eval \"$(it2colors -r --eval)\"` to your shell startup")
+	}
+	return name, nil
+}
+
+// loadNameSet reads a newline-separated name file into a set.
+// Returns nil if the file is absent or unreadable (treated as empty).
+func loadNameSet(path string) map[string]bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line != "" {
+			set[line] = true
+		}
+	}
+	return set
+}
+
+func writeNameFile(path string, set map[string]bool) error {
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var content string
+	if len(names) > 0 {
+		content = strings.Join(names, "\n") + "\n"
+	}
+	return os.WriteFile(path, []byte(content), 0644)
+}
+
+func addToNameFile(path, name string) error {
+	set := loadNameSet(path)
+	if set == nil {
+		set = map[string]bool{}
+	}
+	if set[name] {
+		return nil
+	}
+	set[name] = true
+	return writeNameFile(path, set)
+}
+
+func removeFromNameFile(path, name string) error {
+	set := loadNameSet(path)
+	if set == nil || !set[name] {
+		return nil
+	}
+	delete(set, name)
+	return writeNameFile(path, set)
 }
 
 // recentHistory returns the scheme names from the last n lines of the history

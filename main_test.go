@@ -221,6 +221,63 @@ func TestAdjustColorsChangesRealScheme(t *testing.T) {
 	}
 }
 
+func TestNameFileHelpers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "names.txt")
+
+	t.Run("load missing file returns nil", func(t *testing.T) {
+		if loadNameSet(path) != nil {
+			t.Error("expected nil for missing file")
+		}
+	})
+
+	t.Run("add creates file and deduplicates", func(t *testing.T) {
+		if err := addToNameFile(path, "Alpha"); err != nil {
+			t.Fatal(err)
+		}
+		if err := addToNameFile(path, "Beta"); err != nil {
+			t.Fatal(err)
+		}
+		if err := addToNameFile(path, "Alpha"); err != nil { // duplicate
+			t.Fatal(err)
+		}
+		set := loadNameSet(path)
+		if len(set) != 2 || !set["Alpha"] || !set["Beta"] {
+			t.Errorf("want {Alpha, Beta}, got %v", set)
+		}
+	})
+
+	t.Run("remove deletes entry", func(t *testing.T) {
+		if err := removeFromNameFile(path, "Alpha"); err != nil {
+			t.Fatal(err)
+		}
+		set := loadNameSet(path)
+		if set["Alpha"] || !set["Beta"] {
+			t.Errorf("after remove: want {Beta}, got %v", set)
+		}
+	})
+
+	t.Run("remove missing name is no-op", func(t *testing.T) {
+		if err := removeFromNameFile(path, "DoesNotExist"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("file is sorted", func(t *testing.T) {
+		p2 := filepath.Join(dir, "sorted.txt")
+		for _, n := range []string{"Zebra", "Apple", "Mango"} {
+			if err := addToNameFile(p2, n); err != nil {
+				t.Fatal(err)
+			}
+		}
+		data, _ := os.ReadFile(p2)
+		got := strings.TrimRight(string(data), "\n")
+		if got != "Apple\nMango\nZebra" {
+			t.Errorf("file not sorted: %q", got)
+		}
+	})
+}
+
 func TestEvalOutputQuotesMultiWordNames(t *testing.T) {
 	// Scheme names with spaces must be single-quoted so eval "$(it2colors ...)"
 	// assigns the full name rather than splitting on the space.

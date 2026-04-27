@@ -99,9 +99,25 @@ The guards matter:
 - `[ -z "$CLAUDECODE" ]` — Claude Code sets `CLAUDECODE=1` and sources `.zshrc` before each shell command it runs. Without this guard, every Claude Code tool call applies a new random scheme to the active iTerm2 session.
 - `[ -t 1 ]` — skips non-interactive shells (cron, scp). Without it, the script fails at `open /dev/tty` because there's no controlling terminal.
 
-A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking. (An earlier bash prototype had a `-X` flag for this; it was dropped in the Go rewrite and not yet re-ported.)
-
 `-c` / `--current` reads `$IT2COLORS_SCHEME` to re-apply (or transform) the active scheme — `it2colors -c --hue 30` tints the current theme in place. Errors with a `.bashrc` hint if the env var isn't set, since the feature is meaningless without the eval-style integration.
+
+## Favorites and yuck list
+
+Two plain newline-separated name files (sorted, deduplicated):
+- `~/.it2colors_favorites` — schemes to prefer during random selection
+- `~/.it2colors_yuck` — schemes permanently excluded from random selection
+
+**`-f` / `--favorite`** — adds `$IT2COLORS_SCHEME` to favorites, then exits.
+
+**`--unfavorite`** — removes `$IT2COLORS_SCHEME` from favorites, then exits.
+
+**`--yuck`** — removes `$IT2COLORS_SCHEME` from favorites, adds it to the yuck list, then exits. Combined with `-r`, instead continues and picks a new random scheme (the yucked one is already excluded since the file is written first).
+
+**`-r` pool logic:**
+1. If `~/.it2colors_favorites` is non-empty and `--all` was not passed: pick from favorites, excluding yucked schemes. If all favorites are yucked or invalid, fall through.
+2. Otherwise: pick from all schemes, excluding yuck list and the last 20 history entries (history exclusion is skipped in favorites mode since the pool may be small).
+
+**`--all`** — bypasses favorites and picks from the full scheme pool (yuck still applies).
 
 ## Schemes directory resolution
 
