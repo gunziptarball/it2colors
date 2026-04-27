@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lucasb-eyer/go-colorful"
+	flag "github.com/spf13/pflag"
 	"howett.net/plist"
 )
 
@@ -26,13 +26,13 @@ type Color struct {
 type Profile map[string]Color
 
 func main() {
-	random := flag.Bool("r", false, "pick a random scheme (default when no name is given)")
-	current := flag.Bool("c", false, "use the current scheme from $IT2COLORS_SCHEME (set by -eval)")
+	random := flag.BoolP("random", "r", false, "pick a random scheme (default when no name is given)")
+	current := flag.BoolP("current", "c", false, "use the current scheme from $IT2COLORS_SCHEME (set by --eval)")
 	eval := flag.Bool("eval", false, "print 'export IT2COLORS_SCHEME=<name>' to stdout; OSC escape still goes to /dev/tty")
-	list := flag.Bool("list", false, "list available scheme names and exit")
+	list := flag.BoolP("list", "l", false, "list available scheme names and exit")
 	dir := flag.String("schemes-dir", "", "override the schemes directory")
 	hue := flag.Float64("hue", 0, "rotate every color's hue by this many degrees (in CIE HCL space; preserves perceived lightness)")
-	quiet := flag.Bool("q", false, "don't print the 'Applied scheme: ...' status line")
+	quiet := flag.BoolP("quiet", "q", false, "don't print the 'Applied scheme: ...' status line")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -53,7 +53,7 @@ func main() {
 	}
 
 	if *current && (*random || flag.NArg() > 0) {
-		fail(fmt.Errorf("-c cannot be combined with -r or a scheme name"))
+		fail(fmt.Errorf("--current cannot be combined with --random or a scheme name"))
 	}
 
 	var profileFile string
@@ -61,7 +61,7 @@ func main() {
 	case *current:
 		name := os.Getenv("IT2COLORS_SCHEME")
 		if name == "" {
-			fail(fmt.Errorf("$IT2COLORS_SCHEME is not set; add `eval \"$(it2colors -r -eval)\"` to your shell startup"))
+			fail(fmt.Errorf("$IT2COLORS_SCHEME is not set; add `eval \"$(it2colors -r --eval)\"` to your shell startup"))
 		}
 		profileFile = name + ".itermcolors"
 	case *random || flag.NArg() == 0:
@@ -121,13 +121,13 @@ Flags:
 	flag.PrintDefaults()
 	fmt.Fprint(os.Stderr, `
 Schemes directory resolution order:
-  1. -schemes-dir flag
+  1. --schemes-dir flag
   2. $ITERM2_COLOR_SCHEMES_PATH
   3. newest ~/Downloads/mbadolato-iTerm2-Color-Schemes-*
 
 Suggested .bashrc / .zshrc:
   if [ -t 1 ] && command -v it2colors >/dev/null; then
-    eval "$(it2colors -r -eval)"
+    eval "$(it2colors -r --eval)"
   fi
 `)
 }
