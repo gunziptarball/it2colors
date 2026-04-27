@@ -58,15 +58,18 @@ Three streams, three jobs — keep them separate:
 - stdout: only the `export IT2COLORS_SCHEME=<name>` line under `--eval`. Stays empty otherwise so `eval "$(it2colors …)"` is safe.
 - stderr: the `Applied scheme: <name>` status line (with `(hue +N°)` suffix when rotated) and any errors. `-q` suppresses the status line for scripts that find it noisy; errors still print.
 
-## `--hue`: hue rotation in HCL
+## Color transforms: `--hue`, `--lightness`, `--saturation`
 
-`--hue N` rotates every color in the chosen scheme by N degrees in CIE HCL space (polar form of CIE Lab) before applying it. The point of doing this in HCL rather than HSL/HSV is that **lightness is preserved** — so foreground/background contrast ratios are essentially unchanged and the result is still readable.
+All three operate in CIE HCL space (polar form of CIE Lab) via `adjustColors()`, which runs once on the parsed `Profile` map between `loadProfile` and `applyProfile`.
 
-Implementation notes for future-you:
-- Achromatic colors (chroma below ~1e-4) are passed through untouched. CIE HCL hue is undefined when chroma is 0, and rotating it would tint pure black/white/gray — visibly wrong.
-- Out-of-gamut results after rotation are clamped via `colorful.Color.Clamped()`. This is the source of the hue drift acknowledged in the rotation test (~3–8° on highly saturated colors).
-- The choice of CIE HCL over OKLCH is pragmatic: go-colorful ships HCL out of the box, and the perceptual difference between the two for "rotate by N degrees and look reasonable" isn't worth pulling in a second color library. If we ever do real perceptual work (deduping similar schemes, contrast-aware tinting), revisit.
-- The transform runs once on the parsed `Profile` map between `loadProfile` and `applyProfile`. Adding chroma/lightness knobs later is just additional fields in the same per-color loop.
+- **`--hue N`** — rotates every color's hue by N degrees. Preserves perceived lightness, so foreground/background contrast is essentially unchanged.
+- **`--lightness N`** — shifts every color's L component by N (range roughly -1 to +1). Negative darkens; positive brightens. Applies to achromatic grays too, so `--lightness -0.3` will dim a blinding-white background.
+- **`--saturation F`** — multiplies every color's chroma by F (1.0 = no change, 0 = fully desaturate, 2.0 = double vividness).
+
+Implementation notes:
+- Achromatic colors (chroma below ~1e-4, or NaN hue) skip hue rotation and saturation scaling, but still receive the lightness shift.
+- Out-of-gamut results are clamped via `colorful.Color.Clamped()`. This causes ~3–8° hue drift on highly saturated rotations, and slightly reduces the effective lightness delta on colors near the gamut boundary.
+- CIE HCL over OKLCH: go-colorful ships HCL out of the box; the perceptual difference for these transforms isn't worth pulling in a second library. Revisit if doing contrast-aware or deduplication work.
 
 ## `--preview`: SGR test table
 
@@ -87,12 +90,14 @@ export IT2COLORS_SCHEME=<name>
 Intended `.bashrc`/`.zshrc` usage:
 
 ```bash
-if [ -t 1 ] && command -v it2colors >/dev/null; then
+if [ -z "$CLAUDECODE" ] && [ -t 1 ] && command -v it2colors >/dev/null; then
   eval "$(it2colors -r --eval)"
 fi
 ```
 
-The `[ -t 1 ]` guard matters: skips non-interactive shells (cron, scp). Without the guard, the script will fail at `open /dev/tty` because there's no controlling terminal.
+The guards matter:
+- `[ -z "$CLAUDECODE" ]` — Claude Code sets `CLAUDECODE=1` and sources `.zshrc` before each shell command it runs. Without this guard, every Claude Code tool call applies a new random scheme to the active iTerm2 session.
+- `[ -t 1 ]` — skips non-interactive shells (cron, scp). Without it, the script fails at `open /dev/tty` because there's no controlling terminal.
 
 A future `--yuck` flag should read `$IT2COLORS_SCHEME` to decide what to move out of circulation — that's the whole point of the per-shell tracking. (An earlier bash prototype had a `-X` flag for this; it was dropped in the Go rewrite and not yet re-ported.)
 

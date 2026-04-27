@@ -84,7 +84,7 @@ func TestSlotFor(t *testing.T) {
 	}
 }
 
-func TestRotateHue(t *testing.T) {
+func TestAdjustColors(t *testing.T) {
 	red := Color{Red: 0.8, Green: 0.2, Blue: 0.2}
 	gray := Color{Red: 0.5, Green: 0.5, Blue: 0.5}
 	black := Color{Red: 0, Green: 0, Blue: 0}
@@ -94,33 +94,32 @@ func TestRotateHue(t *testing.T) {
 		"Bold Color":       black,
 	}
 
-	t.Run("zero is identity", func(t *testing.T) {
-		out := rotateHue(in, 0)
-		// Same map returned — no allocation, no transform.
+	t.Run("all-zero is identity", func(t *testing.T) {
+		out := adjustColors(in, 0, 0, 1)
 		if &out == nil || out["Foreground Color"] != red {
-			t.Errorf("rotateHue(_, 0) should be identity")
+			t.Errorf("adjustColors(_, 0, 0, 1) should be identity")
 		}
 	})
 
-	t.Run("360 returns to same hue", func(t *testing.T) {
-		out := rotateHue(in, 360)
+	t.Run("360 hue returns to same hue", func(t *testing.T) {
+		out := adjustColors(in, 360, 0, 1)
 		got := out["Foreground Color"]
 		if !approxColor(got, red, 0.01) {
-			t.Errorf("rotateHue(red, 360) = %+v, want approx %+v", got, red)
+			t.Errorf("hue 360: got %+v, want approx %+v", got, red)
 		}
 	})
 
-	t.Run("preserves lightness", func(t *testing.T) {
+	t.Run("hue rotation preserves lightness", func(t *testing.T) {
 		_, _, lIn := (colorful.Color{R: red.Red, G: red.Green, B: red.Blue}).Hcl()
-		got := rotateHue(in, 120)["Foreground Color"]
+		got := adjustColors(in, 120, 0, 1)["Foreground Color"]
 		_, _, lOut := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
 		if math.Abs(lIn-lOut) > 0.05 {
-			t.Errorf("lightness drifted: in=%v out=%v", lIn, lOut)
+			t.Errorf("lightness drifted under hue rotation: in=%v out=%v", lIn, lOut)
 		}
 	})
 
-	t.Run("achromatic colors pass through", func(t *testing.T) {
-		out := rotateHue(in, 90)
+	t.Run("hue skips achromatic colors", func(t *testing.T) {
+		out := adjustColors(in, 90, 0, 1)
 		if out["Background Color"] != gray {
 			t.Errorf("gray should not rotate, got %+v", out["Background Color"])
 		}
@@ -131,33 +130,93 @@ func TestRotateHue(t *testing.T) {
 
 	t.Run("rotates hue by the requested amount", func(t *testing.T) {
 		hIn, _, _ := (colorful.Color{R: red.Red, G: red.Green, B: red.Blue}).Hcl()
-		got := rotateHue(in, 90)["Foreground Color"]
+		got := adjustColors(in, 90, 0, 1)["Foreground Color"]
 		hOut, _, _ := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
 		want := math.Mod(hIn+90, 360)
 		// Generous tolerance: gamut clamping can shift hue several degrees
-		// when a saturated rotation lands outside displayable sRGB.
+		// on saturated rotations that land outside sRGB.
 		if math.Abs(hOut-want) > 8.0 {
 			t.Errorf("hue: in=%v +90 → got %v, want ≈ %v", hIn, hOut, want)
 		}
 	})
+
+	t.Run("lightness darkens chromatic color", func(t *testing.T) {
+		_, _, lIn := (colorful.Color{R: red.Red, G: red.Green, B: red.Blue}).Hcl()
+		got := adjustColors(in, 0, -0.2, 1)["Foreground Color"]
+		_, _, lOut := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
+		if lOut >= lIn {
+			t.Errorf("expected lightness decrease: in=%v out=%v", lIn, lOut)
+		}
+		// Gamut clamping on the return trip can reduce the effective shift; verify
+		// it moved meaningfully in the right direction rather than asserting exact delta.
+		if lIn-lOut < 0.1 {
+			t.Errorf("lightness drop too small: in=%v out=%v diff=%v", lIn, lOut, lIn-lOut)
+		}
+	})
+
+	t.Run("lightness darkens achromatic color", func(t *testing.T) {
+		_, _, lIn := (colorful.Color{R: gray.Red, G: gray.Green, B: gray.Blue}).Hcl()
+		got := adjustColors(in, 0, -0.2, 1)["Background Color"]
+		_, _, lOut := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
+		if lOut >= lIn {
+			t.Errorf("lightness shift should also darken achromatic gray: in=%v out=%v", lIn, lOut)
+		}
+	})
+
+	t.Run("lightness clamps at 0", func(t *testing.T) {
+		got := adjustColors(in, 0, -2, 1)["Bold Color"] // black shifted way down
+		// HCL round-trip may introduce sub-epsilon noise; check near-black not exact zero.
+		if got.Red > 1e-10 || got.Green > 1e-10 || got.Blue > 1e-10 {
+			t.Errorf("black shifted down should stay near-black, got %+v", got)
+		}
+	})
+
+	t.Run("saturation desaturates chromatic color", func(t *testing.T) {
+		_, chIn, _ := (colorful.Color{R: red.Red, G: red.Green, B: red.Blue}).Hcl()
+		got := adjustColors(in, 0, 0, 0.5)["Foreground Color"]
+		_, chOut, _ := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
+		if chOut >= chIn {
+			t.Errorf("saturation 0.5 should reduce chroma: in=%v out=%v", chIn, chOut)
+		}
+	})
+
+	t.Run("saturation=0 fully desaturates", func(t *testing.T) {
+		got := adjustColors(in, 0, 0, 0)["Foreground Color"]
+		_, chOut, _ := (colorful.Color{R: got.Red, G: got.Green, B: got.Blue}).Hcl()
+		if chOut > 1e-3 {
+			t.Errorf("saturation=0 should produce achromatic, chroma=%v", chOut)
+		}
+	})
 }
 
-func TestRotateHueChangesRealScheme(t *testing.T) {
+func TestAdjustColorsChangesRealScheme(t *testing.T) {
 	p, err := loadProfile(filepath.Join("testdata", "Adventure.itermcolors"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var orig, rot bytes.Buffer
+	var orig bytes.Buffer
 	if err := applyProfile(&orig, p); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyProfile(&rot, rotateHue(p, 45)); err != nil {
-		t.Fatal(err)
+
+	for _, tc := range []struct {
+		name string
+		hue, lightness, saturation float64
+	}{
+		{"hue 45", 45, 0, 1},
+		{"lightness -0.2", 0, -0.2, 1},
+		{"saturation 0.5", 0, 0, 0.5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := applyProfile(&buf, adjustColors(p, tc.hue, tc.lightness, tc.saturation)); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Equal(orig.Bytes(), buf.Bytes()) {
+				t.Fatalf("adjustColors(%v, %v, %v) produced identical OSC bytes — transform is a no-op", tc.hue, tc.lightness, tc.saturation)
+			}
+		})
 	}
-	if bytes.Equal(orig.Bytes(), rot.Bytes()) {
-		t.Fatal("rotateHue(_, 45) produced identical OSC bytes — rotation is a no-op")
-	}
-	t.Logf("orig and rotated differ as expected (orig=%dB, rot=%dB)", orig.Len(), rot.Len())
 }
 
 func approxColor(a, b Color, eps float64) bool {

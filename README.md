@@ -47,12 +47,14 @@ it2colors --help         # full flag reference
 Add to `.bashrc` / `.zshrc`:
 
 ```bash
-if [ -t 1 ] && command -v it2colors >/dev/null; then
+if [ -z "$CLAUDECODE" ] && [ -t 1 ] && command -v it2colors >/dev/null; then
   eval "$(it2colors -r --eval)"
 fi
 ```
 
-Each new interactive shell picks a random scheme. The `[ -t 1 ]` guard skips non-interactive shells (cron, `scp`, etc.) where `/dev/tty` doesn't exist.
+Each new interactive shell picks a random scheme. The guards:
+- `[ -z "$CLAUDECODE" ]` — skips Claude Code's subshells, which source `.zshrc` before running commands and would otherwise apply a new random scheme on every tool call.
+- `[ -t 1 ]` — skips non-interactive shells (cron, `scp`, etc.) where `/dev/tty` doesn't exist.
 
 `--eval` exports `IT2COLORS_SCHEME=<name>` so subsequent calls like `it2colors -c --hue 30` know which scheme is active in *this* shell — handy when several iTerm tabs are running different schemes.
 

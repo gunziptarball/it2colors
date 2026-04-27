@@ -31,7 +31,9 @@ func main() {
 	eval := flag.Bool("eval", false, "print 'export IT2COLORS_SCHEME=<name>' to stdout; OSC escape still goes to /dev/tty")
 	list := flag.BoolP("list", "l", false, "list available scheme names and exit")
 	dir := flag.String("schemes-dir", "", "override the schemes directory")
-	hue := flag.Float64("hue", 0, "rotate every color's hue by this many degrees (in CIE HCL space; preserves perceived lightness)")
+	hue := flag.Float64("hue", 0, "rotate every color's hue by this many degrees (CIE HCL; preserves perceived lightness)")
+	lightness := flag.Float64("lightness", 0, "shift every color's perceived lightness (CIE HCL L, 0–1 range; negative darkens, e.g. -0.2)")
+	saturation := flag.Float64("saturation", 1, "scale every color's chroma/saturation (CIE HCL; 1.0 = no change, <1 desaturates, >1 boosts)")
 	quiet := flag.BoolP("quiet", "q", false, "don't print the 'Applied scheme: ...' status line")
 	preview := flag.BoolP("preview", "p", false, "after applying, print a foreground × background SGR test table to verify the scheme")
 	flag.Usage = usage
@@ -81,7 +83,7 @@ func main() {
 	if err != nil {
 		fail(fmt.Errorf("loading %s: %w", profilePath, err))
 	}
-	profile = rotateHue(profile, *hue)
+	profile = adjustColors(profile, *hue, *lightness, *saturation)
 	name := strings.TrimSuffix(profileFile, ".itermcolors")
 
 	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
@@ -104,8 +106,18 @@ func main() {
 
 	if !*quiet {
 		msg := fmt.Sprintf("Applied scheme: %s", name)
+		var adj []string
 		if *hue != 0 {
-			msg += fmt.Sprintf(" (hue %+g°)", *hue)
+			adj = append(adj, fmt.Sprintf("hue %+g°", *hue))
+		}
+		if *lightness != 0 {
+			adj = append(adj, fmt.Sprintf("lightness %+g", *lightness))
+		}
+		if *saturation != 1 {
+			adj = append(adj, fmt.Sprintf("saturation ×%.2g", *saturation))
+		}
+		if len(adj) > 0 {
+			msg += " (" + strings.Join(adj, ", ") + ")"
 		}
 		fmt.Fprintln(os.Stderr, msg)
 	}
@@ -256,11 +268,15 @@ func slotFor(key string) (byte, bool) {
 	return 0, false
 }
 
-// HCL (not HSL) so lightness is preserved and contrast against the
-// background is unchanged. Achromatic colors are passed through:
-// their hue is undefined and rotating it would tint pure black/white/gray.
-func rotateHue(p Profile, deg float64) Profile {
-	if deg == 0 {
+// adjustColors applies hue rotation, lightness shift, and saturation scaling
+// in CIE HCL space. Using HCL (not HSL) preserves perceived contrast.
+//
+// Lightness shift applies to all colors including achromatic grays, so
+// darkening a bright theme dims the background as intended. Hue rotation and
+// saturation scaling are skipped for achromatic colors (chroma ≈ 0) because
+// their hue is undefined and saturation is already zero.
+func adjustColors(p Profile, hueDeg, lightnessDelta, saturationFactor float64) Profile {
+	if hueDeg == 0 && lightnessDelta == 0 && saturationFactor == 1 {
 		return p
 	}
 	out := make(Profile, len(p))
@@ -268,18 +284,41 @@ func rotateHue(p Profile, deg float64) Profile {
 	for k, c := range p {
 		col := colorful.Color{R: c.Red, G: c.Green, B: c.Blue}.Clamped()
 		h, ch, l := col.Hcl()
-		if ch < achromatic || math.IsNaN(h) {
+
+		chromatic := ch >= achromatic && !math.IsNaN(h)
+		if chromatic {
+			if hueDeg != 0 {
+				h = math.Mod(h+hueDeg, 360)
+				if h < 0 {
+					h += 360
+				}
+			}
+			ch = math.Max(0, ch*saturationFactor)
+		}
+
+		l = clamp01(l + lightnessDelta)
+
+		if !chromatic && lightnessDelta == 0 {
 			out[k] = c
 			continue
 		}
-		h = math.Mod(h+deg, 360)
-		if h < 0 {
-			h += 360
+		if !chromatic {
+			h = 0 // hue is irrelevant when chroma is 0
 		}
 		r := colorful.Hcl(h, ch, l).Clamped()
 		out[k] = Color{Red: r.R, Green: r.G, Blue: r.B}
 	}
 	return out
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // Foreground × background SGR table, ported from the
