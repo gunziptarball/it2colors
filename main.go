@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -40,8 +41,14 @@ func main() {
 	unfavorite := flag.Bool("unfavorite", false, "remove $IT2COLORS_SCHEME from favorites")
 	yuck := flag.Bool("yuck", false, "blacklist $IT2COLORS_SCHEME from future picks; combine with -r to immediately move to a new scheme")
 	all := flag.Bool("all", false, "pick from all schemes, ignoring the favorites list (yuck list still applies)")
+	showVersion := flag.BoolP("version", "v", false, "print version and exit")
 	flag.Usage = usage
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(buildVersion())
+		return
+	}
 
 	schemesDir, err := resolveSchemesDir(*dir)
 	if err != nil {
@@ -307,6 +314,14 @@ func pickRandom(schemesDir string, useAll bool) (string, error) {
 		}
 	}
 	return pool[rand.IntN(len(pool))], nil
+}
+
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" {
+		return "(devel)"
+	}
+	return info.Main.Version
 }
 
 func currentSchemeName() (string, error) {
