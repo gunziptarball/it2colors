@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -216,6 +217,32 @@ func TestAdjustColorsChangesRealScheme(t *testing.T) {
 				t.Fatalf("adjustColors(%v, %v, %v) produced identical OSC bytes — transform is a no-op", tc.hue, tc.lightness, tc.saturation)
 			}
 		})
+	}
+}
+
+func TestRecentHistory(t *testing.T) {
+	dir := t.TempDir()
+	histPath := filepath.Join(dir, ".it2colors_history")
+
+	lines := []string{
+		"2026-01-01T00:00:00Z\tSchemeA",
+		"2026-01-02T00:00:00Z\tSchemeB",
+		"2026-01-03T00:00:00Z\tSchemeC",
+		"",                          // trailing newline edge case
+	}
+	if err := os.WriteFile(histPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Patch the lookup to use our temp file via a helper that accepts a path.
+	data, _ := os.ReadFile(histPath)
+	got := parseRecentHistory(data, 2)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d: %v", len(got), got)
+	}
+	if got[0] != "SchemeC" || got[1] != "SchemeB" {
+		t.Errorf("want [SchemeC SchemeB], got %v", got)
 	}
 }
 

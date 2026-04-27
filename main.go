@@ -208,7 +208,48 @@ func pickRandom(schemesDir string) (string, error) {
 	if len(names) == 0 {
 		return "", fmt.Errorf("no .itermcolors files in %s/schemes", schemesDir)
 	}
+	if recent := recentHistory(20); len(recent) > 0 {
+		skip := make(map[string]bool, len(recent))
+		for _, n := range recent {
+			skip[n+".itermcolors"] = true
+		}
+		var pool []string
+		for _, n := range names {
+			if !skip[n] {
+				pool = append(pool, n)
+			}
+		}
+		if len(pool) > 0 {
+			names = pool
+		}
+	}
 	return names[rand.IntN(len(names))], nil
+}
+
+// recentHistory returns the scheme names from the last n lines of the history
+// file, most-recent first. Returns nil if the file is absent or unreadable.
+func recentHistory(n int) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".it2colors_history"))
+	if err != nil {
+		return nil
+	}
+	return parseRecentHistory(data, n)
+}
+
+func parseRecentHistory(data []byte, n int) []string {
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	var recent []string
+	for i := len(lines) - 1; i >= 0 && len(recent) < n; i-- {
+		parts := strings.SplitN(lines[i], "\t", 2)
+		if len(parts) == 2 && parts[1] != "" {
+			recent = append(recent, parts[1])
+		}
+	}
+	return recent
 }
 
 func loadProfile(path string) (Profile, error) {
