@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/jacksongilman/it2colors/main/schema/it2colors-settings.schema.json",
+  "title": "it2colors settings",
+  "description": "User settings for the it2colors CLI: named aliases that bundle a base scheme with HSV adjustments, and per-scheme default adjustments.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional pointer to this JSON Schema; useful for editor validation."
+    },
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Settings file format version. Currently always 1."
+    },
+    "aliases": {
+      "type": "object",
+      "description": "Named aliases. Each key is invocable on the command line like a base scheme name (e.g. `it2colors my-warm-adventure`).",
+      "additionalProperties": { "$ref": "#/$defs/alias" }
+    },
+    "scheme_defaults": {
+      "type": "object",
+      "description": "Per-scheme HSV defaults applied automatically whenever the named scheme is selected (by name, by -r, or by -c).",
+      "additionalProperties": { "$ref": "#/$defs/adjustment" }
+    }
+  },
+  "$defs": {
+    "adjustment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tuple of HSV-style transforms applied in CIE HCL space. All fields default to no-op values when omitted.",
+      "properties": {
+        "hue": {
+          "type": "number",
+          "minimum": -360,
+          "maximum": 360,
+          "default": 0,
+          "description": "Hue rotation in degrees. 0 leaves hue unchanged."
+        },
+        "lightness": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1,
+          "default": 0,
+          "description": "Perceived lightness shift (CIE HCL L). Negative darkens, positive brightens."
+        },
+        "saturation": {
+          "type": "number",
+          "minimum": 0,
+          "default": 1,
+          "description": "Chroma multiplier. 1.0 = no change, 0 = grayscale, >1 boosts. NOTE: an absent field or 0 is treated as 1.0 by the CLI to make hand-editing forgiving."
+        }
+      }
+    },
+    "alias": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base"],
+      "description": "An alias binds a name to (base scheme, HSV adjustment). Invoking the alias applies the base with the adjustment.",
+      "properties": {
+        "base": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base scheme name (a .itermcolors filename without extension). Must exist in the schemes directory at apply time."
+        },
+        "hue": { "$ref": "#/$defs/adjustment/properties/hue" },
+        "lightness": { "$ref": "#/$defs/adjustment/properties/lightness" },
+        "saturation": { "$ref": "#/$defs/adjustment/properties/saturation" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "$schema": "https://raw.githubusercontent.com/jacksongilman/it2colors/main/schema/it2colors-settings.schema.json",
+      "version": 1,
+      "aliases": {
+        "cozy-adventure": {
+          "base": "Adventure",
+          "hue": 0,
+          "lightness": -0.1,
+          "saturation": 1.0
+        }
+      },
+      "scheme_defaults": {
+        "Solarized Dark": {
+          "hue": 0,
+          "lightness": 0,
+          "saturation": 1.2
+        }
+      }
+    }
+  ]
+}

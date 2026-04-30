@@ -41,6 +41,11 @@ func main() {
 	unfavorite := flag.Bool("unfavorite", false, "remove $IT2COLORS_SCHEME from favorites")
 	yuck := flag.Bool("yuck", false, "blacklist $IT2COLORS_SCHEME from future picks; combine with -r to immediately move to a new scheme")
 	all := flag.Bool("all", false, "pick from all schemes, ignoring the favorites list (yuck list still applies)")
+	saveAlias := flag.String("save", "", "save the current invocation (resolved base scheme + active HSV) as an alias under this name")
+	saveDefaults := flag.Bool("save-defaults", false, "save the active HSV adjustments as defaults on the resolved base scheme; with no HSV flags, clears any saved defaults")
+	deleteAlias := flag.String("delete-alias", "", "remove the named alias from settings and exit")
+	listAliases := flag.Bool("list-aliases", false, "print human-readable alias mappings and exit")
+	includeAliases := flag.Bool("include-aliases", false, "with -r, include aliases in the random pool")
 	showVersion := flag.BoolP("version", "v", false, "print version and exit")
 	completion := flag.String("completion", "", "print shell completion script and exit (bash, zsh, or fish)")
 	flag.Usage = usage
@@ -65,14 +70,42 @@ func main() {
 		fail(err)
 	}
 
+	settings, err := loadSettings()
+	if err != nil {
+		fail(err)
+	}
+
 	if *list {
 		names, err := listSchemes(schemesDir)
 		if err != nil {
 			fail(err)
 		}
+		invocable := make([]string, 0, len(names)+len(settings.Aliases))
 		for _, n := range names {
-			fmt.Println(strings.TrimSuffix(n, ".itermcolors"))
+			invocable = append(invocable, strings.TrimSuffix(n, ".itermcolors"))
 		}
+		invocable = append(invocable, settings.aliasNames()...)
+		sort.Strings(invocable)
+		for _, n := range invocable {
+			fmt.Println(n)
+		}
+		return
+	}
+
+	if *listAliases {
+		printAliases(settings)
+		return
+	}
+
+	if *deleteAlias != "" {
+		if _, ok := settings.Aliases[*deleteAlias]; !ok {
+			fail(fmt.Errorf("no such alias: %s", *deleteAlias))
+		}
+		delete(settings.Aliases, *deleteAlias)
+		if err := settings.save(); err != nil {
+			fail(fmt.Errorf("saving settings: %w", err))
+		}
+		fmt.Fprintf(os.Stderr, "Deleted alias: %s\n", *deleteAlias)
 		return
 	}
 
@@ -122,32 +155,45 @@ func main() {
 		fail(fmt.Errorf("--current cannot be combined with --random or a scheme name"))
 	}
 
-	var profileFile string
+	var invokedName string
 	switch {
 	case *current:
 		scheme, err := currentSchemeName()
 		if err != nil {
 			fail(err)
 		}
-		profileFile = scheme + ".itermcolors"
+		invokedName = scheme
 	case *random || flag.NArg() == 0:
-		f, err := pickRandom(schemesDir, *all)
+		n, err := pickRandom(schemesDir, *all, *includeAliases, settings)
 		if err != nil {
 			fail(err)
 		}
-		profileFile = f
+		invokedName = n
 	default:
-		arg := strings.TrimSuffix(flag.Arg(0), ".itermcolors")
-		profileFile = arg + ".itermcolors"
+		invokedName = strings.TrimSuffix(flag.Arg(0), ".itermcolors")
 	}
 
+	baseScheme, baseline, isAlias := settings.resolveBaselineFor(invokedName)
+	mergedHue, mergedLightness, mergedSaturation := mergeAdjustment(baseline, *hue, *lightness, *saturation)
+	merged := Adjustment{Hue: mergedHue, Lightness: mergedLightness, Saturation: mergedSaturation}
+
+	if *saveAlias != "" {
+		handleSaveAlias(*saveAlias, baseScheme, merged, schemesDir, settings)
+		return
+	}
+	if *saveDefaults {
+		handleSaveDefaults(baseScheme, merged, schemesDir, settings)
+		return
+	}
+
+	profileFile := baseScheme + ".itermcolors"
 	profilePath := filepath.Join(schemesDir, "schemes", profileFile)
 	profile, err := loadProfile(profilePath)
 	if err != nil {
 		fail(fmt.Errorf("loading %s: %w", profilePath, err))
 	}
-	profile = adjustColors(profile, *hue, *lightness, *saturation)
-	name := strings.TrimSuffix(profileFile, ".itermcolors")
+	profile = adjustColors(profile, mergedHue, mergedLightness, mergedSaturation)
+	hasDefaults := !isAlias && !baseline.IsNoOp()
 
 	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
 	if err != nil {
@@ -163,30 +209,159 @@ func main() {
 		}
 	}
 
-	if err := appendHistory(name); err != nil {
+	if err := appendHistory(invokedName); err != nil {
 		fmt.Fprintln(os.Stderr, "it2colors: warning: history append failed:", err)
 	}
 
 	if !*quiet {
-		msg := fmt.Sprintf("Applied scheme: %s", name)
-		var adj []string
-		if *hue != 0 {
-			adj = append(adj, fmt.Sprintf("hue %+g°", *hue))
-		}
-		if *lightness != 0 {
-			adj = append(adj, fmt.Sprintf("lightness %+g", *lightness))
-		}
-		if *saturation != 1 {
-			adj = append(adj, fmt.Sprintf("saturation ×%.2g", *saturation))
-		}
-		if len(adj) > 0 {
-			msg += " (" + strings.Join(adj, ", ") + ")"
+		var msg string
+		if isAlias {
+			msg = fmt.Sprintf("Applied alias: %s (%s", invokedName, baseScheme)
+			if adj := formatAdjustments(mergedHue, mergedLightness, mergedSaturation); adj != "" {
+				msg += ", " + adj
+			}
+			msg += ")"
+		} else {
+			msg = fmt.Sprintf("Applied scheme: %s", baseScheme)
+			if adj := formatAdjustments(mergedHue, mergedLightness, mergedSaturation); adj != "" {
+				msg += " (" + adj + ")"
+			}
+			if hasDefaults {
+				msg += " [defaults]"
+			}
 		}
 		fmt.Fprintln(os.Stderr, msg)
 	}
 
 	if *eval {
-		fmt.Printf("export IT2COLORS_SCHEME='%s'\n", name)
+		fmt.Printf("export IT2COLORS_SCHEME='%s'\n", invokedName)
+	}
+}
+
+// formatAdjustments returns "hue +30°, lightness -0.10, saturation ×1.20" or
+// the empty string if all values are no-ops.
+func formatAdjustments(hue, lightness, saturation float64) string {
+	var parts []string
+	if hue != 0 {
+		parts = append(parts, fmt.Sprintf("hue %+g°", hue))
+	}
+	if lightness != 0 {
+		parts = append(parts, fmt.Sprintf("lightness %+g", lightness))
+	}
+	if saturation != 1 {
+		parts = append(parts, fmt.Sprintf("saturation ×%.2g", saturation))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// mergeAdjustment combines a saved baseline with CLI flag values: an
+// explicitly-set CLI flag overrides the baseline, otherwise the baseline
+// applies. Uses pflag's Changed to detect explicit-set vs. default.
+func mergeAdjustment(baseline Adjustment, cliHue, cliLightness, cliSaturation float64) (h, l, s float64) {
+	h = baseline.Hue
+	l = baseline.Lightness
+	s = baseline.Saturation
+	if s == 0 {
+		s = 1.0
+	}
+	if f := flag.CommandLine.Lookup("hue"); f != nil && f.Changed {
+		h = cliHue
+	}
+	if f := flag.CommandLine.Lookup("lightness"); f != nil && f.Changed {
+		l = cliLightness
+	}
+	if f := flag.CommandLine.Lookup("saturation"); f != nil && f.Changed {
+		s = cliSaturation
+	}
+	return
+}
+
+func handleSaveAlias(name, baseScheme string, merged Adjustment, schemesDir string, s *Settings) {
+	if !schemeExists(schemesDir, baseScheme) {
+		fail(fmt.Errorf("base scheme %q not found in %s/schemes", baseScheme, schemesDir))
+	}
+	if schemeExists(schemesDir, name) {
+		fail(fmt.Errorf("alias name %q collides with an existing scheme; pick a different name", name))
+	}
+	if s.Aliases == nil {
+		s.Aliases = map[string]Alias{}
+	}
+	_, existed := s.Aliases[name]
+	s.Aliases[name] = Alias{
+		Base:       baseScheme,
+		Hue:        merged.Hue,
+		Lightness:  merged.Lightness,
+		Saturation: merged.Saturation,
+	}
+	if err := s.save(); err != nil {
+		fail(fmt.Errorf("saving settings: %w", err))
+	}
+	verb := "Saved"
+	if existed {
+		verb = "Updated"
+	}
+	msg := fmt.Sprintf("%s alias: %s → %s", verb, name, baseScheme)
+	if adj := formatAdjustments(merged.Hue, merged.Lightness, merged.Saturation); adj != "" {
+		msg += " (" + adj + ")"
+	}
+	fmt.Fprintln(os.Stderr, msg)
+}
+
+func handleSaveDefaults(baseScheme string, merged Adjustment, schemesDir string, s *Settings) {
+	if !schemeExists(schemesDir, baseScheme) {
+		fail(fmt.Errorf("base scheme %q not found in %s/schemes", baseScheme, schemesDir))
+	}
+	if merged.IsNoOp() {
+		if _, ok := s.SchemeDefaults[baseScheme]; ok {
+			delete(s.SchemeDefaults, baseScheme)
+			if err := s.save(); err != nil {
+				fail(fmt.Errorf("saving settings: %w", err))
+			}
+			fmt.Fprintf(os.Stderr, "Cleared defaults for: %s\n", baseScheme)
+			return
+		}
+		fail(fmt.Errorf("--save-defaults requires at least one of --hue, --lightness, --saturation"))
+	}
+	if s.SchemeDefaults == nil {
+		s.SchemeDefaults = map[string]Adjustment{}
+	}
+	s.SchemeDefaults[baseScheme] = merged
+	if err := s.save(); err != nil {
+		fail(fmt.Errorf("saving settings: %w", err))
+	}
+	msg := fmt.Sprintf("Saved defaults for: %s", baseScheme)
+	if adj := formatAdjustments(merged.Hue, merged.Lightness, merged.Saturation); adj != "" {
+		msg += " (" + adj + ")"
+	}
+	fmt.Fprintln(os.Stderr, msg)
+}
+
+func schemeExists(schemesDir, name string) bool {
+	_, err := os.Stat(filepath.Join(schemesDir, "schemes", name+".itermcolors"))
+	return err == nil
+}
+
+func printAliases(s *Settings) {
+	if s == nil || len(s.Aliases) == 0 {
+		fmt.Fprintln(os.Stderr, "No aliases saved. Use --save NAME to create one.")
+		return
+	}
+	names := make([]string, 0, len(s.Aliases))
+	for n := range s.Aliases {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		a := s.Aliases[n]
+		line := fmt.Sprintf("%s → %s", n, a.Base)
+		sat := a.Saturation
+		if sat == 0 {
+			sat = 1.0
+		}
+		if adj := formatAdjustments(a.Hue, a.Lightness, sat); adj != "" {
+			line += " (" + adj + ")"
+		}
+		fmt.Println(line)
 	}
 }
 
@@ -263,55 +438,70 @@ func listSchemes(schemesDir string) ([]string, error) {
 	return names, nil
 }
 
-func pickRandom(schemesDir string, useAll bool) (string, error) {
-	allNames, err := listSchemes(schemesDir) // filenames with .itermcolors extension
+// pickRandom returns an invoked name (sans .itermcolors extension). When
+// includeAliases is true and settings has aliases, alias names are added to
+// the candidate pool subject to the yuck filter.
+func pickRandom(schemesDir string, useAll, includeAliases bool, settings *Settings) (string, error) {
+	allFiles, err := listSchemes(schemesDir) // filenames with .itermcolors extension
 	if err != nil {
 		return "", err
 	}
-	if len(allNames) == 0 {
+	if len(allFiles) == 0 {
 		return "", fmt.Errorf("no .itermcolors files in %s/schemes", schemesDir)
+	}
+	allNames := make([]string, len(allFiles))
+	for i, f := range allFiles {
+		allNames[i] = strings.TrimSuffix(f, ".itermcolors")
 	}
 
 	home, _ := os.UserHomeDir()
 	yuck := loadNameSet(filepath.Join(home, ".it2colors_yuck"))
 
+	var aliases []string
+	if includeAliases && settings != nil {
+		for name := range settings.Aliases {
+			if !yuck[name] {
+				aliases = append(aliases, name)
+			}
+		}
+	}
+
 	// If favorites are defined and --all wasn't requested, restrict to that pool.
 	if !useAll {
 		favs := loadNameSet(filepath.Join(home, ".it2colors_favorites"))
 		if len(favs) > 0 {
-			// Validate against available schemes so stale favorites don't cause errors.
 			valid := make(map[string]bool, len(allNames))
 			for _, n := range allNames {
-				valid[strings.TrimSuffix(n, ".itermcolors")] = true
+				valid[n] = true
 			}
 			var pool []string
 			for name := range favs {
 				if valid[name] && !yuck[name] {
-					pool = append(pool, name+".itermcolors")
+					pool = append(pool, name)
 				}
 			}
+			pool = append(pool, aliases...)
 			if len(pool) > 0 {
 				sort.Strings(pool)
 				return pool[rand.IntN(len(pool))], nil
 			}
-			// All favorites were yucked or invalid — fall through to full pool.
 		}
 	}
 
-	// Full pool: exclude yuck, then apply recent-history exclusion.
+	// Full pool: exclude yuck, then apply recent-history exclusion (schemes only).
 	pool := make([]string, 0, len(allNames))
 	for _, n := range allNames {
-		if !yuck[strings.TrimSuffix(n, ".itermcolors")] {
+		if !yuck[n] {
 			pool = append(pool, n)
 		}
 	}
 	if len(pool) == 0 {
-		pool = allNames // every scheme is yucked — give up and use all
+		pool = append(pool, allNames...) // every scheme is yucked — give up and use all
 	}
 	if recent := recentHistory(20); len(recent) > 0 {
 		skip := make(map[string]bool, len(recent))
 		for _, n := range recent {
-			skip[n+".itermcolors"] = true
+			skip[n] = true
 		}
 		var filtered []string
 		for _, n := range pool {
@@ -323,6 +513,7 @@ func pickRandom(schemesDir string, useAll bool) (string, error) {
 			pool = filtered
 		}
 	}
+	pool = append(pool, aliases...)
 	return pool[rand.IntN(len(pool))], nil
 }
 

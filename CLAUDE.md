@@ -119,6 +119,31 @@ Two plain newline-separated name files (sorted, deduplicated):
 
 **`--all`** — bypasses favorites and picks from the full scheme pool (yuck still applies).
 
+## Settings file: aliases and scheme defaults
+
+`~/.it2colors_settings.json` holds two related things:
+
+- **Aliases** — `name → (base scheme, HSV adjustment)`. Invocable on the CLI exactly like a scheme name (`it2colors my-warm-adventure`).
+- **Scheme defaults** — `scheme name → HSV adjustment`. Applied automatically whenever the named scheme is selected, by name or by `-r`.
+
+**Resolution at scheme-selection time** (in main.go, after determining the *invoked name*):
+
+1. Alias match → resolve to alias's base + alias's HSV as the **baseline**.
+2. Scheme-default match → use the saved HSV as the baseline.
+3. No match → no-op baseline.
+
+Then any `--hue` / `--lightness` / `--saturation` the user explicitly passed on the CLI **overrides the matching baseline component**, leaving unspecified components alone. The "did the user pass this flag?" check is `flag.CommandLine.Lookup(name).Changed` (pflag).
+
+`$IT2COLORS_SCHEME` (and the `--eval` export) holds the **invoked name** — alias or scheme — so `-c` re-resolves through the alias table on every call. This keeps the env var human-readable and means deleting an alias doesn't break active shells.
+
+**Save-then-exit flags** (`--save NAME`, `--save-defaults`) follow the same pattern as `--favorite` — they resolve the base scheme just like a normal invocation, then write to settings and exit *without* applying the scheme. `--save NAME` errors if `NAME` collides with an existing scheme filename. `--save-defaults` with all-no-op HSV values **clears** any existing defaults for the resolved scheme.
+
+**Saturation's no-op = 1.0 quirk.** The Go zero value for saturation is 0 (full grayscale), but the no-op is 1. `Adjustment.UnmarshalJSON` defaults missing `saturation` fields to 1.0 so hand-edited JSON like `{"hue": 30}` reads as "rotate hue, leave saturation alone." An explicit `"saturation": 0` is preserved.
+
+**JSON Schema.** `schema/it2colors-settings.schema.json` is for editor tooling and documentation only — the Go code does not consume it at runtime. Typed unmarshaling into the `Settings` struct is the runtime validator.
+
+**Existing flat files (favorites, yuck, history) are intentionally NOT migrated** into the new settings file. They have different access patterns (atomic-rewrite vs. append-only) and the migration churn isn't worth it.
+
 ## Schemes directory resolution
 
 In order:

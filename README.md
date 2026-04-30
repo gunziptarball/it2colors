@@ -130,6 +130,37 @@ Once `~/.it2colors_favorites` is non-empty, `-r` draws only from that pool. Use 
 
 The yuck list is stored in `~/.it2colors_yuck` — a plain sorted text file you can edit directly.
 
+## Saved aliases and scheme defaults
+
+Bake a tweaked theme into a reusable name with `--save`, or attach HSV defaults to a base scheme so they apply automatically every time you pick it.
+
+```sh
+# Save Adventure with hue +30° and a small darken under a new name:
+it2colors Adventure --hue 30 --lightness -0.1 --save warm-adventure
+
+# Invoke the alias like any scheme:
+it2colors warm-adventure
+
+# CLI flags override the saved baseline component-wise — here, hue is
+# taken from the CLI but lightness still comes from the alias:
+it2colors warm-adventure --hue 0
+
+# Always-darken Adventure when it's picked plainly or by -r:
+it2colors Adventure --save-defaults --lightness -0.1
+
+# Clear those defaults later:
+it2colors Adventure --save-defaults
+
+# Browse and clean up:
+it2colors --list-aliases
+it2colors --delete-alias warm-adventure
+
+# Include aliases in the random pool:
+it2colors -r --include-aliases
+```
+
+Aliases are stored in `~/.it2colors_settings.json` alongside scheme defaults. A JSON Schema is checked into the repo at [`schema/it2colors-settings.schema.json`](schema/it2colors-settings.schema.json) for editor validation — VS Code, JetBrains, and friends will autocomplete and lint hand-edits.
+
 ## History
 
 Every applied scheme is appended to `~/.it2colors_history`:
