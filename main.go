@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,8 @@ func main() {
 	hue := flag.Float64("hue", 0, "rotate every color's hue by this many degrees (CIE HCL; preserves perceived lightness)")
 	lightness := flag.Float64("lightness", 0, "shift every color's perceived lightness (CIE HCL L, 0–1 range; negative darkens, e.g. -0.2)")
 	saturation := flag.Float64("saturation", 1, "scale every color's chroma/saturation (CIE HCL; 1.0 = no change, <1 desaturates, >1 boosts)")
+	bgTint := flag.String("bg-tint", "", "tint the background toward a hue (named color like 'red' or degrees like '25'); fg colors get a sympathetic weaker nudge")
+	bgTintStrength := flag.Float64("bg-tint-strength", 0.3, "how strongly --bg-tint injects chroma (0..1); fg slots receive 0.3× this")
 	quiet := flag.BoolP("quiet", "q", false, "don't print the 'Applied scheme: ...' status line")
 	preview := flag.BoolP("preview", "p", false, "after applying, print a foreground × background SGR test table to verify the scheme")
 	favorite := flag.BoolP("favorite", "f", false, "add $IT2COLORS_SCHEME to favorites (used by default random pool when non-empty)")
@@ -193,6 +196,18 @@ func main() {
 		fail(fmt.Errorf("loading %s: %w", profilePath, err))
 	}
 	profile = adjustColors(profile, mergedHue, mergedLightness, mergedSaturation)
+
+	var bgTintHueDeg float64
+	bgTintActive := *bgTint != ""
+	if bgTintActive {
+		h, err := bgTintHue(*bgTint)
+		if err != nil {
+			fail(err)
+		}
+		bgTintHueDeg = h
+		profile = applyBgTint(profile, bgTintHueDeg, *bgTintStrength)
+	}
+
 	hasDefaults := !isAlias && !baseline.IsNoOp()
 
 	tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
@@ -214,16 +229,25 @@ func main() {
 	}
 
 	if !*quiet {
+		adj := formatAdjustments(mergedHue, mergedLightness, mergedSaturation)
+		if bgTintActive {
+			tintPart := fmt.Sprintf("bg-tint %s @ %.2g", *bgTint, *bgTintStrength)
+			if adj == "" {
+				adj = tintPart
+			} else {
+				adj += ", " + tintPart
+			}
+		}
 		var msg string
 		if isAlias {
 			msg = fmt.Sprintf("Applied alias: %s (%s", invokedName, baseScheme)
-			if adj := formatAdjustments(mergedHue, mergedLightness, mergedSaturation); adj != "" {
+			if adj != "" {
 				msg += ", " + adj
 			}
 			msg += ")"
 		} else {
 			msg = fmt.Sprintf("Applied scheme: %s", baseScheme)
-			if adj := formatAdjustments(mergedHue, mergedLightness, mergedSaturation); adj != "" {
+			if adj != "" {
 				msg += " (" + adj + ")"
 			}
 			if hasDefaults {
@@ -730,6 +754,75 @@ func adjustColors(p Profile, hueDeg, lightnessDelta, saturationFactor float64) P
 			h = 0 // hue is irrelevant when chroma is 0
 		}
 		r := colorful.Hcl(h, ch, l).Clamped()
+		out[k] = Color{Red: r.R, Green: r.G, Blue: r.B}
+	}
+	return out
+}
+
+// bgTintHues maps named colors to HCL hue degrees. Picked to land near the
+// target color at moderate L/C; this is taste, not science.
+var bgTintHues = map[string]float64{
+	"red":     25,
+	"orange":  55,
+	"yellow":  90,
+	"green":   135,
+	"cyan":    195,
+	"blue":    265,
+	"purple":  305,
+	"magenta": 330,
+	"pink":    0,
+}
+
+// bgTintHue parses a --bg-tint argument as either a named color or a numeric
+// degree value, normalized to [0, 360).
+func bgTintHue(s string) (float64, error) {
+	if h, ok := bgTintHues[strings.ToLower(strings.TrimSpace(s))]; ok {
+		return h, nil
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+		h := math.Mod(v, 360)
+		if h < 0 {
+			h += 360
+		}
+		return h, nil
+	}
+	names := make([]string, 0, len(bgTintHues))
+	for n := range bgTintHues {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return 0, fmt.Errorf("--bg-tint: unrecognized hue %q (use degrees or one of: %s)", s, strings.Join(names, ", "))
+}
+
+// applyBgTint pulls every color in the profile toward targetHue with a
+// baseline chroma proportional to strength. The Background Color slot gets
+// full strength; everything else gets a sympathetic 0.3× dose so the scheme
+// feels coherently warm/cool without losing fg/bg lightness contrast.
+//
+// Unlike adjustColors, this *replaces* hue rather than rotating, because the
+// whole point is to inject a target hue into near-grayscale colors whose
+// existing hue is meaningless.
+func applyBgTint(p Profile, targetHue, strength float64) Profile {
+	if strength == 0 {
+		return p
+	}
+	// go-colorful's HCL uses chroma in roughly 0–1.5; 0.3 reads as a clearly
+	// tinted but not garish color across realistic L values.
+	const targetChroma = 0.3
+	const fgWeight = 0.3
+	out := make(Profile, len(p))
+	for k, c := range p {
+		weight := fgWeight
+		if k == "Background Color" {
+			weight = 1.0
+		}
+		col := colorful.Color{R: c.Red, G: c.Green, B: c.Blue}.Clamped()
+		_, ch, l := col.Hcl()
+		newCh := ch + (targetChroma-ch)*weight*strength
+		if newCh < 0 {
+			newCh = 0
+		}
+		r := colorful.Hcl(targetHue, newCh, l).Clamped()
 		out[k] = Color{Red: r.R, Green: r.G, Blue: r.B}
 	}
 	return out

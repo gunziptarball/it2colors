@@ -221,6 +221,95 @@ func TestAdjustColorsChangesRealScheme(t *testing.T) {
 	}
 }
 
+func TestBgTintHue(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    float64
+		wantErr bool
+	}{
+		{"red", 25, false},
+		{"RED", 25, false},
+		{"  blue  ", 265, false},
+		{"25", 25, false},
+		{"-30", 330, false},
+		{"720", 0, false},
+		{"chartreuse", 0, true},
+		{"", 0, true},
+	}
+	for _, c := range cases {
+		got, err := bgTintHue(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("bgTintHue(%q): expected error, got %v", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("bgTintHue(%q): unexpected error: %v", c.in, err)
+			continue
+		}
+		if math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("bgTintHue(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestApplyBgTint(t *testing.T) {
+	// Realistic near-black bg (L ≈ 0.18) and mid-gray fg (L ≈ 0.5) — pure
+	// #000 would be out of gamut at any chroma > 0 and Clamped() would have
+	// to lift L to compensate.
+	bgIn := Color{Red: 0.1, Green: 0.1, Blue: 0.1}
+	fgIn := Color{Red: 0.5, Green: 0.5, Blue: 0.5}
+	in := Profile{
+		"Background Color": bgIn,
+		"Foreground Color": fgIn,
+		"Ansi 1 Color":     {Red: 0.8, Green: 0.2, Blue: 0.2},
+	}
+
+	t.Run("strength 0 is identity", func(t *testing.T) {
+		out := applyBgTint(in, 25, 0)
+		for k, v := range in {
+			if out[k] != v {
+				t.Errorf("strength 0 changed %s: %+v -> %+v", k, v, out[k])
+			}
+		}
+	})
+
+	t.Run("background gains chroma at target hue, lightness preserved", func(t *testing.T) {
+		_, _, lIn := (colorful.Color{R: bgIn.Red, G: bgIn.Green, B: bgIn.Blue}).Hcl()
+		out := applyBgTint(in, 25, 0.5)
+		bg := out["Background Color"]
+		hOut, chOut, lOut := (colorful.Color{R: bg.Red, G: bg.Green, B: bg.Blue}).Hcl()
+		if chOut <= 0.05 {
+			t.Errorf("background chroma did not increase: %v", chOut)
+		}
+		if !math.IsNaN(hOut) && math.Abs(hOut-25) > 8 {
+			t.Errorf("background hue: got %v, want ≈ 25", hOut)
+		}
+		if math.Abs(lIn-lOut) > 0.05 {
+			t.Errorf("background lightness drifted: in=%v out=%v", lIn, lOut)
+		}
+	})
+
+	t.Run("foreground tinted less than background", func(t *testing.T) {
+		out := applyBgTint(in, 25, 0.5)
+		bg := out["Background Color"]
+		fg := out["Foreground Color"]
+		_, chBgIn, _ := (colorful.Color{R: bgIn.Red, G: bgIn.Green, B: bgIn.Blue}).Hcl()
+		_, chFgIn, _ := (colorful.Color{R: fgIn.Red, G: fgIn.Green, B: fgIn.Blue}).Hcl()
+		_, chBgOut, _ := (colorful.Color{R: bg.Red, G: bg.Green, B: bg.Blue}).Hcl()
+		_, chFgOut, _ := (colorful.Color{R: fg.Red, G: fg.Green, B: fg.Blue}).Hcl()
+		bgShift := math.Abs(chBgOut - chBgIn)
+		fgShift := math.Abs(chFgOut - chFgIn)
+		if fgShift >= bgShift {
+			t.Errorf("foreground chroma shift (%v) should be smaller than background (%v)", fgShift, bgShift)
+		}
+		if fgShift == 0 {
+			t.Errorf("foreground should still receive a sympathetic nudge, got 0 shift")
+		}
+	})
+}
+
 func TestNameFileHelpers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "names.txt")
